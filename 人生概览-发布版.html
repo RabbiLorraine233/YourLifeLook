@@ -1,0 +1,1436 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>人生概览 · A Life in Chapters</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Playfair+Display:ital,wght@0,400;0,500;0,600;1,400&family=Noto+Serif+SC:wght@300;400;500;600&family=Noto+Sans+SC:wght@200;300;400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script>
+// canvas-export.js — render the chronicle onto a canvas and download as PNG.
+// Plain JS (no JSX). Exposes window.exportChronicle(model).
+(function () {
+  "use strict";
+
+  // tokenize for wrapping: keep latin words/numbers intact, break CJK per char
+  function tokenize(text) {
+    return text.match(/[A-Za-z0-9'’.,!?:;%·&()\-—]+|\s+|[^\s]/g) || [];
+  }
+  function wrap(ctx, text, maxW) {
+    if (!text) return [];
+    const tokens = tokenize(text);
+    const lines = [];
+    let line = "";
+    for (const tk of tokens) {
+      const trial = line + tk;
+      if (ctx.measureText(trial).width > maxW && line.trim() !== "") {
+        lines.push(line.replace(/\s+$/, ""));
+        line = /^\s+$/.test(tk) ? "" : tk;
+      } else {
+        line = trial;
+      }
+    }
+    if (line.trim() !== "" || lines.length === 0) lines.push(line.replace(/\s+$/, ""));
+    return lines;
+  }
+
+  function spacedWidth(ctx, text, sp) {
+    let w = 0;
+    for (const ch of text) w += ctx.measureText(ch).width + sp;
+    return w - sp;
+  }
+  // draw letter-spaced text (reliable across browsers). align: 'center'|'left'
+  function drawSpaced(ctx, text, x, y, sp, align) {
+    const total = spacedWidth(ctx, text, sp);
+    let cx = align === "center" ? x - total / 2 : x;
+    const prev = ctx.textAlign;
+    ctx.textAlign = "left";
+    for (const ch of text) {
+      ctx.fillText(ch, cx, y);
+      cx += ctx.measureText(ch).width + sp;
+    }
+    ctx.textAlign = prev;
+  }
+
+  function makeGrain(w, h, blend) {
+    const tile = document.createElement("canvas");
+    tile.width = tile.height = 160;
+    const tctx = tile.getContext("2d");
+    const img = tctx.createImageData(160, 160);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = Math.random() * 255 | 0;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+      img.data[i + 3] = 14;
+    }
+    tctx.putImageData(img, 0, 0);
+    return tile;
+  }
+
+  window.exportChronicle = async function (m) {
+    if (document.fonts && document.fonts.ready) { try { await document.fonts.ready; } catch (e) {} }
+
+    const S = 2.5;
+    const W = 920, padX = 96, padTop = 96, padBottom = 92;
+    const cx = W / 2;
+    const axisX = padX + 128, leftRight = padX + 104, contentX = padX + 152;
+    const contentW = W - padX - contentX;
+    const serif = m.serif, sans = m.sans, c = m.colors, accent = m.accent;
+
+    // measuring context
+    const mc = document.createElement("canvas").getContext("2d");
+
+    // ── measure pass: build op list + total height ───────────────────────────
+    const ops = [];
+    let y = padTop;
+
+    // kicker
+    if (m.kicker) {
+      ops.push({ t: "spaced", text: m.kicker, x: cx, y: y + 9, sp: 4.4, align: "center",
+        font: "500 11px " + sans, fill: accent });
+      y += 9 + 26;
+    }
+    // name (may wrap)
+    mc.font = "500 60px " + serif;
+    const nameLines = wrap(mc, m.name || " ", W - 2 * padX);
+    for (let i = 0; i < nameLines.length; i++) {
+      ops.push({ t: "text", text: nameLines[i], x: cx, y: y + 50 + i * 64, align: "center",
+        font: "500 60px " + serif, fill: c.ink });
+    }
+    y += nameLines.length * 64 + 6;
+    // born
+    if (m.born) {
+      ops.push({ t: "spaced", text: m.born, x: cx, y: y + 12, sp: 1.8, align: "center",
+        font: "400 13px " + sans, fill: c.muted });
+      y += 12 + 18;
+    }
+    // motto
+    if (m.motto) {
+      mc.font = "italic 400 22px " + serif;
+      const mottoLines = wrap(mc, "「" + m.motto + "」", 470);
+      y += 8;
+      for (let i = 0; i < mottoLines.length; i++) {
+        ops.push({ t: "text", text: mottoLines[i], x: cx, y: y + 18 + i * 33, align: "center",
+          font: "italic 400 22px " + serif, fill: c.soft });
+      }
+      y += mottoLines.length * 33 + 4;
+    }
+    // ornament
+    y += 38;
+    ops.push({ t: "ornament", y: y, cx: cx });
+    y += 14;
+
+    // timeline
+    y += 50;
+    const firstNodeTop = y;
+    const drawNode = (n, today) => {
+      const nodeTop = y;
+      // content column
+      let cy = nodeTop;
+      // cat label
+      const catColor = today ? c.muted : n.catColor;
+      ops.push({ t: "catlabel", text: n.catLabel, x: contentX, y: nodeTop + 9, color: catColor, font: "500 10.5px " + sans });
+      cy = nodeTop + 24;
+      // title
+      const titleFont = today ? "italic 500 18.5px " + serif : "500 18.5px " + sans;
+      mc.font = titleFont;
+      const titleLines = wrap(mc, n.title, contentW);
+      for (let i = 0; i < titleLines.length; i++) {
+        ops.push({ t: "text", text: titleLines[i], x: contentX, y: cy + 15 + i * 25, align: "left",
+          font: titleFont, fill: today ? c.soft : c.ink });
+      }
+      cy += titleLines.length * 25;
+      // desc
+      if (n.desc) {
+        cy += 6;
+        mc.font = "italic 400 16px " + serif;
+        const descLines = wrap(mc, n.desc, contentW);
+        for (let i = 0; i < descLines.length; i++) {
+          ops.push({ t: "text", text: descLines[i], x: contentX, y: cy + 13 + i * 25, align: "left",
+            font: "italic 400 16px " + serif, fill: c.soft });
+        }
+        cy += descLines.length * 25;
+      }
+      const contentBottom = cy;
+      // left column
+      let ly = nodeTop;
+      ops.push({ t: "text", text: String(n.year), x: leftRight, y: nodeTop + 26, align: "right",
+        font: (today ? "italic 500 32px " : "500 32px ") + serif, fill: today ? c.muted : c.ink });
+      ly = nodeTop + 34;
+      if (n.when) { ops.push({ t: "text", text: n.when, x: leftRight, y: ly + 10, align: "right", font: "400 11px " + sans, fill: c.muted }); ly += 19; }
+      if (n.age) { ops.push({ t: "text", text: n.age, x: leftRight, y: ly + 10, align: "right", font: "500 11.5px " + sans, fill: today ? c.muted : accent }); ly += 18; }
+      const leftBottom = ly;
+      // dot
+      ops.push({ t: "dot", x: axisX, y: nodeTop + 13, color: catColor, hollow: !!today, halo: c.paper });
+      lastDotY = nodeTop + 13;
+      y = Math.max(contentBottom, leftBottom) + m.gap;
+    };
+
+    let lastDotY = firstNodeTop;
+    m.nodes.forEach((n) => drawNode(n, false));
+    if (m.today) drawNode(m.today, true);
+    y -= m.gap; // remove trailing gap
+
+    // axis line op (insert at front so dots draw over it)
+    ops.unshift({ t: "axis", x: axisX, y1: firstNodeTop + 4, y2: lastDotY });
+
+    // colophon
+    y += 56;
+    if (m.colophon) {
+      ops.push({ t: "spaced", text: m.colophon, x: cx, y: y + 8, sp: 3.4, align: "center",
+        font: "400 10px " + sans, fill: c.faint });
+      y += 8 + 12;
+    }
+
+    const totalH = y + padBottom;
+
+    // ── draw pass ────────────────────────────────────────────────────────────
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(W * S);
+    canvas.height = Math.round(totalH * S);
+    const ctx = canvas.getContext("2d");
+    ctx.scale(S, S);
+    ctx.textBaseline = "alphabetic";
+
+    // paper
+    ctx.fillStyle = c.paper;
+    ctx.fillRect(0, 0, W, totalH);
+    // top accent line
+    const grad = ctx.createLinearGradient(0, 0, W, 0);
+    grad.addColorStop(0, "rgba(0,0,0,0)");
+    grad.addColorStop(0.5, accent);
+    grad.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = grad; ctx.fillRect(0, 0, W, 3); ctx.restore();
+
+    for (const op of ops) {
+      if (op.t === "text") {
+        ctx.font = op.font; ctx.fillStyle = op.fill; ctx.textAlign = op.align || "left";
+        ctx.fillText(op.text, op.x, op.y);
+      } else if (op.t === "spaced") {
+        ctx.font = op.font; ctx.fillStyle = op.fill;
+        drawSpaced(ctx, op.text, op.x, op.y, op.sp, op.align);
+      } else if (op.t === "catlabel") {
+        // small dot + spaced label
+        ctx.fillStyle = op.color;
+        ctx.beginPath(); ctx.arc(op.x + 2.5, op.y - 3, 2.5, 0, 7); ctx.fill();
+        ctx.font = op.font; ctx.fillStyle = op.color;
+        drawSpaced(ctx, op.text, op.x + 12, op.y, 1.6, "left");
+      } else if (op.t === "axis") {
+        ctx.strokeStyle = c.line; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(op.x, op.y1); ctx.lineTo(op.x, op.y2); ctx.stroke();
+      } else if (op.t === "dot") {
+        // paper halo to break the line
+        ctx.fillStyle = op.halo;
+        ctx.beginPath(); ctx.arc(op.x, op.y, 6.5, 0, 7); ctx.fill();
+        if (op.hollow) {
+          ctx.fillStyle = c.paper; ctx.beginPath(); ctx.arc(op.x, op.y, 4.5, 0, 7); ctx.fill();
+          ctx.strokeStyle = c.muted; ctx.lineWidth = 1.4;
+          ctx.beginPath(); ctx.arc(op.x, op.y, 4.2, 0, 7); ctx.stroke();
+        } else {
+          ctx.fillStyle = op.color; ctx.beginPath(); ctx.arc(op.x, op.y, 4.5, 0, 7); ctx.fill();
+        }
+      } else if (op.t === "ornament") {
+        const g1 = ctx.createLinearGradient(op.cx - 74, 0, op.cx - 20, 0);
+        g1.addColorStop(0, "rgba(0,0,0,0)"); g1.addColorStop(1, c.faint);
+        ctx.strokeStyle = g1; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(op.cx - 74, op.y); ctx.lineTo(op.cx - 20, op.y); ctx.stroke();
+        const g2 = ctx.createLinearGradient(op.cx + 20, 0, op.cx + 74, 0);
+        g2.addColorStop(0, c.faint); g2.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.strokeStyle = g2;
+        ctx.beginPath(); ctx.moveTo(op.cx + 20, op.y); ctx.lineTo(op.cx + 74, op.y); ctx.stroke();
+        ctx.save(); ctx.translate(op.cx, op.y); ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = accent; ctx.fillRect(-2.6, -2.6, 5.2, 5.2); ctx.restore();
+      }
+    }
+
+    // grain
+    if (m.grain) {
+      const tile = makeGrain();
+      const pat = ctx.createPattern(tile, "repeat");
+      ctx.save(); ctx.globalAlpha = 0.85; ctx.fillStyle = pat; ctx.fillRect(0, 0, W, totalH); ctx.restore();
+    }
+
+    // download
+    window.__lastChronicleCanvas = canvas;
+    if (m.__preview) {
+      canvas.style.cssText = "position:fixed;inset:0;z-index:99999;width:" + W + "px;height:auto;max-height:100vh;box-shadow:0 0 60px #000;background:#fff";
+      document.body.appendChild(canvas);
+      return canvas;
+    }
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.download = m.filename || "人生概览.png";
+    a.href = url; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return true;
+  };
+})();
+
+</script>
+<style>
+  :root{ color-scheme: light dark; }
+  *{ box-sizing: border-box; margin:0; padding:0; }
+  html,body{ height:100%; }
+  body{
+    font-family:'Noto Sans SC', ui-sans-serif, system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    background:#1a1814;
+  }
+
+  /* ── Theme tokens ───────────────────────────────────────────── */
+  .app{
+    --serif:'Cormorant Garamond','Noto Serif SC', serif;
+    --accent:#9a7b46;
+    --gap:30px;
+    min-height:100vh; width:100%;
+    display:flex; flex-direction:column; align-items:center;
+    transition:background .4s ease;
+  }
+  .app[data-theme="ivory"]{
+    --page:#efe9dd; --paper:#fcfaf5; --ink:#221f18; --soft:#6c6457;
+    --muted:#a7a193; --faint:#ddd7c9; --line:#e8e2d4; --halo:#fcfaf5;
+    --blend:multiply;
+    background:radial-gradient(125% 85% at 50% 0%, #f3eee4 0%, #ebe5d8 60%, #e6dfd1 100%);
+  }
+  .app[data-theme="ink"]{
+    --page:#100e0a; --paper:#1b1812; --ink:#f1ebdc; --soft:#c3bcab; --muted:#928c7c;
+    --faint:#3e3a2d; --line:#322e24; --halo:#1b1812;
+    --blend:screen;
+    background:radial-gradient(125% 85% at 50% 0%, #16140f 0%, #0e0c09 65%, #0a0907 100%);
+  }
+
+  /* ── Toolbar (chrome, never exported) ───────────────────────── */
+  .bar{
+    position:fixed; top:18px; left:50%; transform:translateX(-50%);
+    z-index:50; display:flex; align-items:center; gap:2px;
+    padding:5px; border-radius:999px;
+    background:color-mix(in srgb, var(--paper) 82%, transparent);
+    border:.5px solid color-mix(in srgb, var(--ink) 12%, transparent);
+    box-shadow:0 6px 24px rgba(0,0,0,.16), 0 1px 0 rgba(255,255,255,.4) inset;
+    -webkit-backdrop-filter:blur(18px) saturate(150%); backdrop-filter:blur(18px) saturate(150%);
+  }
+  .bar button{
+    appearance:none; border:0; background:transparent; cursor:pointer;
+    font-family:inherit; font-size:12.5px; font-weight:500; letter-spacing:.02em;
+    color:var(--soft); padding:8px 15px; border-radius:999px; line-height:1;
+    display:flex; align-items:center; gap:7px; transition:all .16s ease; white-space:nowrap;
+  }
+  .bar button:hover{ background:color-mix(in srgb, var(--ink) 7%, transparent); color:var(--ink); }
+  .bar button.primary{ color:var(--ink); }
+  .bar button .ic{ width:14px; height:14px; stroke:currentColor; fill:none; stroke-width:1.6; }
+  .bar .sep{ width:1px; height:18px; background:color-mix(in srgb, var(--ink) 12%, transparent); margin:0 3px; }
+
+  /* ── The sheet (the exported artifact) ──────────────────────── */
+  .stage{ width:100%; display:flex; justify-content:center; padding:92px 24px 120px; }
+  .sheet{
+    position:relative; width:100%; max-width:768px;
+    background:var(--paper); color:var(--ink);
+    padding:84px 92px 92px; border-radius:3px;
+    box-shadow:0 1px 1px rgba(0,0,0,.05), 0 30px 70px -28px rgba(0,0,0,.42);
+    overflow:hidden;
+  }
+  .grain{ /* paper grain (real element so it survives export) */
+    position:absolute; inset:0; pointer-events:none; z-index:3;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size:180px 180px; opacity:.04; mix-blend-mode:var(--blend);
+  }
+  .app.nograin .grain{ display:none; }
+  .topline{ /* faint top edge accent */
+    position:absolute; top:0; left:0; right:0; height:3px; z-index:2; opacity:.55;
+    background:linear-gradient(90deg, transparent, var(--accent), transparent);
+  }
+
+  /* ── Header ─────────────────────────────────────────────────── */
+  .hd{ text-align:center; position:relative; z-index:4; }
+  .kicker{
+    font-size:11px; font-weight:500; letter-spacing:.42em; text-transform:uppercase;
+    color:var(--accent); margin-bottom:26px; padding-left:.42em;
+  }
+  .name{
+    font-family:var(--serif); font-weight:500; line-height:1.02;
+    font-size:clamp(46px, 8vw, 66px); letter-spacing:.01em; color:var(--ink);
+  }
+  .born{
+    font-size:12.5px; font-weight:400; letter-spacing:.16em; color:var(--muted);
+    margin-top:20px; text-transform:uppercase;
+  }
+  .motto{
+    font-family:var(--serif); font-style:italic; font-weight:400;
+    font-size:21px; line-height:1.5; color:var(--soft); margin-top:18px;
+    max-width:30ch; margin-left:auto; margin-right:auto; text-wrap:balance;
+  }
+  .ornament{ display:flex; align-items:center; justify-content:center; gap:14px; margin:42px auto 8px; }
+  .ornament i{ height:1px; width:54px; background:linear-gradient(90deg, transparent, var(--faint)); }
+  .ornament i:last-child{ background:linear-gradient(90deg, var(--faint), transparent); }
+  .ornament b{ width:5px; height:5px; transform:rotate(45deg); background:var(--accent); display:block; }
+
+  /* ── Timeline ───────────────────────────────────────────────── */
+  .timeline{ position:relative; margin-top:54px; z-index:4; }
+  .axisline{
+    position:absolute; left:128px; top:10px; bottom:18px; width:1px; background:var(--line);
+  }
+  .node{
+    position:relative; display:grid; grid-template-columns:104px 1fr; column-gap:48px;
+    padding-bottom:var(--gap);
+  }
+  .node:last-of-type{ padding-bottom:0; }
+  .left{ text-align:right; padding-top:1px; }
+  .yr{ font-family:var(--serif); font-weight:500; font-size:32px; line-height:1; color:var(--ink); font-variant-numeric:lining-nums; }
+  .when{ font-size:11px; color:var(--muted); margin-top:7px; letter-spacing:.04em; }
+  .age{ font-size:11.5px; color:var(--accent); margin-top:5px; letter-spacing:.05em; font-weight:500; }
+  .dot{
+    position:absolute; left:128px; top:9px; width:9px; height:9px; border-radius:50%;
+    background:var(--c); transform:translateX(-50%);
+    box-shadow:0 0 0 4px var(--halo);
+  }
+  .content{ padding-top:0; cursor:pointer; }
+  .content .cat{
+    display:inline-flex; align-items:center; gap:6px; font-size:10.5px; font-weight:500;
+    letter-spacing:.16em; text-transform:uppercase; color:var(--c); margin-bottom:7px;
+  }
+  .content .cat .cd{ width:5px; height:5px; border-radius:50%; background:var(--c); }
+  .ttl{ font-size:18.5px; font-weight:500; color:var(--ink); line-height:1.32; letter-spacing:.005em; }
+  .desc{
+    font-family:var(--serif); font-style:italic; font-size:16px; line-height:1.55;
+    color:var(--soft); margin-top:9px; max-width:46ch; text-wrap:pretty;
+  }
+  .content:hover .ttl{ color:var(--accent); }
+  .edittag{ opacity:0; transition:opacity .16s; font-size:10px; color:var(--muted); margin-left:9px; font-style:normal; font-family:'Noto Sans SC',sans-serif; letter-spacing:.08em; }
+  .content:hover .edittag{ opacity:1; }
+
+  /* terminal / today marker */
+  .node.today .yr{ color:var(--muted); font-style:italic; }
+  .node.today .dot{ background:var(--paper); box-shadow:0 0 0 4px var(--halo), inset 0 0 0 1.5px var(--muted); }
+  .node.today .left .age{ color:var(--muted); }
+
+  .empty{ text-align:center; color:var(--muted); font-size:14px; padding:40px 0; font-family:var(--serif); font-style:italic; }
+
+  /* footer mark */
+  .colophon{
+    position:relative; z-index:4; margin-top:64px; text-align:center;
+    font-size:10px; letter-spacing:.32em; text-transform:uppercase; color:var(--faint);
+  }
+
+  /* entrance animation */
+  @media (prefers-reduced-motion: no-preference){
+    .anim .node, .anim .hd > *, .anim .colophon{ opacity:0; animation:rise .9s cubic-bezier(.2,.7,.2,1) forwards; }
+    @keyframes rise{ from{ opacity:0; transform:translateY(14px); } to{ opacity:1; transform:none; } }
+  }
+  .exporting .node, .exporting .hd > *, .exporting .colophon{ opacity:1 !important; animation:none !important; transform:none !important; }
+
+  /* ── Modals ─────────────────────────────────────────────────── */
+  .scrim{
+    position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center;
+    padding:24px; background:color-mix(in srgb, var(--page) 55%, rgba(10,9,7,.55));
+    -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); animation:fade .2s ease;
+  }
+  @keyframes fade{ from{opacity:0} to{opacity:1} }
+  .modal{
+    width:100%; max-width:440px; background:var(--paper); color:var(--ink);
+    border-radius:8px; padding:34px 36px 30px; position:relative;
+    box-shadow:0 40px 90px -30px rgba(0,0,0,.55); border:.5px solid color-mix(in srgb, var(--ink) 9%, transparent);
+    animation:pop .26s cubic-bezier(.2,.8,.2,1); max-height:88vh; overflow-y:auto;
+  }
+  @keyframes pop{ from{opacity:0; transform:translateY(10px) scale(.98)} to{opacity:1; transform:none} }
+  .modal h2{ font-family:var(--serif); font-weight:500; font-size:25px; margin-bottom:4px; }
+  .modal .sub{ font-size:12px; color:var(--muted); margin-bottom:24px; letter-spacing:.02em; }
+  .field{ margin-bottom:16px; }
+  .field label{ display:block; font-size:11px; font-weight:500; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-bottom:7px; }
+  .field input, .field textarea{
+    width:100%; font-family:inherit; font-size:14.5px; color:var(--ink);
+    background:color-mix(in srgb, var(--ink) 3.5%, transparent);
+    border:.5px solid color-mix(in srgb, var(--ink) 14%, transparent); border-radius:6px;
+    padding:10px 12px; outline:none; transition:border-color .15s, background .15s;
+  }
+  .field input:focus, .field textarea:focus{ border-color:var(--accent); background:color-mix(in srgb, var(--ink) 1.5%, transparent); }
+  .field textarea{ resize:vertical; min-height:64px; line-height:1.5; }
+  .field .hint{ font-size:10.5px; color:var(--faint); margin-top:6px; }
+  .row3{ display:grid; grid-template-columns:1.3fr 1fr 1fr; gap:10px; }
+  .cats{ display:flex; flex-wrap:wrap; gap:8px; }
+  .catbtn{
+    appearance:none; cursor:pointer; font-family:inherit; font-size:12px; font-weight:500;
+    display:inline-flex; align-items:center; gap:7px; padding:8px 13px; border-radius:999px;
+    border:1px solid color-mix(in srgb, var(--ink) 14%, transparent); background:transparent;
+    color:var(--soft); transition:all .15s;
+  }
+  .catbtn .sw{ width:9px; height:9px; border-radius:50%; }
+  .catbtn[data-on="1"]{ border-color:var(--cc); color:var(--cc); background:color-mix(in srgb, var(--cc) 9%, transparent); }
+  .actions{ display:flex; align-items:center; gap:10px; margin-top:26px; }
+  .actions .spacer{ flex:1; }
+  .btn{
+    appearance:none; cursor:pointer; font-family:inherit; font-size:13px; font-weight:500;
+    padding:10px 20px; border-radius:7px; border:0; transition:all .15s; letter-spacing:.02em;
+  }
+  .btn.fill{ background:var(--ink); color:var(--paper); }
+  .btn.fill:hover{ opacity:.86; }
+  .btn.ghost{ background:transparent; color:var(--muted); }
+  .btn.ghost:hover{ color:var(--ink); }
+  .btn.danger{ background:transparent; color:#9a4a4a; }
+  .btn.danger:hover{ background:color-mix(in srgb, #9a4a4a 10%, transparent); }
+
+  .toast{
+    position:fixed; bottom:26px; left:50%; transform:translateX(-50%) translateY(20px);
+    z-index:200; background:var(--ink); color:var(--paper); padding:11px 20px; border-radius:999px;
+    font-size:12.5px; letter-spacing:.03em; opacity:0; transition:all .3s cubic-bezier(.2,.8,.2,1);
+    box-shadow:0 12px 30px rgba(0,0,0,.3);
+  }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+  /* ── Mobile ─────────────────────────────────────────────────── */
+  @media (max-width:640px){
+    .stage{ padding:74px 0 56px; }
+    .sheet{ padding:40px 24px 46px; border-radius:0; max-width:none; box-shadow:0 14px 40px -22px rgba(0,0,0,.3); }
+    .kicker{ font-size:10px; letter-spacing:.3em; margin-bottom:20px; }
+    .name{ font-size:clamp(38px,13vw,54px); }
+    .born{ margin-top:16px; }
+    .motto{ font-size:19px; margin-top:16px; max-width:24ch; }
+    .ornament{ margin:34px auto 6px; }
+    .timeline{ margin-top:38px; }
+    .axisline{ left:9px; top:7px; bottom:14px; }
+    .node{ grid-template-columns:1fr; column-gap:0; padding-left:32px;
+      padding-bottom:calc(var(--gap) - 2px); }
+    .left{ text-align:left; padding-top:0; display:flex; align-items:baseline;
+      gap:11px; flex-wrap:wrap; margin-bottom:9px; }
+    .left .yr, .left .when, .left .age{ white-space:nowrap; }
+    .yr{ font-size:26px; }
+    .when{ margin-top:0; }
+    .age{ margin-top:0; }
+    .dot{ left:9px; top:8px; }
+    .content .cat{ margin-bottom:6px; }
+    .ttl{ font-size:18px; }
+    .desc{ max-width:none; font-size:15.5px; }
+    .colophon{ margin-top:44px; }
+    .bar{ gap:0; padding:4px; top:14px; max-width:calc(100vw - 24px); }
+    .bar button{ padding:9px 12px; font-size:12px; gap:6px; }
+    .bar .sep{ margin:0 1px; }
+    .modal{ padding:28px 24px 26px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+// @ds-adherence-ignore -- omelette starter scaffold (raw elements/hex/px by design)
+
+/* BEGIN USAGE */
+// tweaks-panel.jsx
+// Reusable Tweaks shell + form-control helpers.
+// Exports (to window): useTweaks, TweaksPanel, TweakSection, TweakRow, TweakSlider,
+//   TweakToggle, TweakRadio, TweakSelect, TweakText, TweakNumber, TweakColor, TweakButton.
+//
+// Owns the host protocol (listens for __activate_edit_mode / __deactivate_edit_mode,
+// posts __edit_mode_available / __edit_mode_set_keys / __edit_mode_dismissed) so
+// individual prototypes don't re-roll it. Ships a consistent set of controls so you
+// don't hand-draw <input type="range">, segmented radios, steppers, etc.
+//
+// Usage (in an HTML file that loads React + Babel):
+//
+//   const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+//     "primaryColor": "#D97757",
+//     "palette": ["#D97757", "#29261b", "#f6f4ef"],
+//     "fontSize": 16,
+//     "density": "regular",
+//     "dark": false
+//   }/*EDITMODE-END*/;
+//
+//   function App() {
+//     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+//     return (
+//       <div style={{ fontSize: t.fontSize, color: t.primaryColor }}>
+//         Hello
+//         <TweaksPanel>
+//           <TweakSection label="Typography" />
+//           <TweakSlider label="Font size" value={t.fontSize} min={10} max={32} unit="px"
+//                        onChange={(v) => setTweak('fontSize', v)} />
+//           <TweakRadio  label="Density" value={t.density}
+//                        options={['compact', 'regular', 'comfy']}
+//                        onChange={(v) => setTweak('density', v)} />
+//           <TweakSection label="Theme" />
+//           <TweakColor  label="Primary" value={t.primaryColor}
+//                        options={['#D97757', '#2A6FDB', '#1F8A5B', '#7A5AE0']}
+//                        onChange={(v) => setTweak('primaryColor', v)} />
+//           <TweakColor  label="Palette" value={t.palette}
+//                        options={[['#D97757', '#29261b', '#f6f4ef'],
+//                                  ['#475569', '#0f172a', '#f1f5f9']]}
+//                        onChange={(v) => setTweak('palette', v)} />
+//           <TweakToggle label="Dark mode" value={t.dark}
+//                        onChange={(v) => setTweak('dark', v)} />
+//         </TweaksPanel>
+//       </div>
+//     );
+//   }
+//
+// TweakRadio is the segmented control for 2–3 short options (auto-falls-back to
+// TweakSelect past ~16/~10 chars per label); reach for TweakSelect directly when
+// options are many or long. For color tweaks always curate 3-4 options rather than
+// a free picker; an option can also be a whole 2–5 color palette (the stored value
+// is the array). The Tweak* controls are a floor, not a ceiling — build custom
+// controls inside the panel if a tweak calls for UI they don't cover.
+/* END USAGE */
+// ─────────────────────────────────────────────────────────────────────────────
+
+const __TWEAKS_STYLE = `
+  .twk-panel{position:fixed;right:16px;bottom:16px;z-index:2147483646;width:280px;
+    max-height:calc(100vh - 32px);display:flex;flex-direction:column;
+    transform:scale(var(--dc-inv-zoom,1));transform-origin:bottom right;
+    background:rgba(250,249,247,.78);color:#29261b;
+    -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);
+    border:.5px solid rgba(255,255,255,.6);border-radius:14px;
+    box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 12px 40px rgba(0,0,0,.18);
+    font:11.5px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;overflow:hidden}
+  .twk-hd{display:flex;align-items:center;justify-content:space-between;
+    padding:10px 8px 10px 14px;cursor:move;user-select:none}
+  .twk-hd b{font-size:12px;font-weight:600;letter-spacing:.01em}
+  .twk-x{appearance:none;border:0;background:transparent;color:rgba(41,38,27,.55);
+    width:22px;height:22px;border-radius:6px;cursor:default;font-size:13px;line-height:1}
+  .twk-x:hover{background:rgba(0,0,0,.06);color:#29261b}
+  .twk-body{padding:2px 14px 14px;display:flex;flex-direction:column;gap:10px;
+    overflow-y:auto;overflow-x:hidden;min-height:0;
+    scrollbar-width:thin;scrollbar-color:rgba(0,0,0,.15) transparent}
+  .twk-body::-webkit-scrollbar{width:8px}
+  .twk-body::-webkit-scrollbar-track{background:transparent;margin:2px}
+  .twk-body::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15);border-radius:4px;
+    border:2px solid transparent;background-clip:content-box}
+  .twk-body::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,.25);
+    border:2px solid transparent;background-clip:content-box}
+  .twk-row{display:flex;flex-direction:column;gap:5px}
+  .twk-row-h{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}
+  .twk-lbl{display:flex;justify-content:space-between;align-items:baseline;
+    color:rgba(41,38,27,.72)}
+  .twk-lbl>span:first-child{font-weight:500}
+  .twk-val{color:rgba(41,38,27,.5);font-variant-numeric:tabular-nums}
+
+  .twk-sect{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+    color:rgba(41,38,27,.45);padding:10px 0 0}
+  .twk-sect:first-child{padding-top:0}
+
+  .twk-field{appearance:none;box-sizing:border-box;width:100%;min-width:0;height:26px;padding:0 8px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:7px;
+    background:rgba(255,255,255,.6);color:inherit;font:inherit;outline:none}
+  .twk-field:focus{border-color:rgba(0,0,0,.25);background:rgba(255,255,255,.85)}
+  select.twk-field{padding-right:22px;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='rgba(0,0,0,.5)' d='M0 0h10L5 6z'/></svg>");
+    background-repeat:no-repeat;background-position:right 8px center}
+
+  .twk-slider{appearance:none;-webkit-appearance:none;width:100%;height:4px;margin:6px 0;
+    border-radius:999px;background:rgba(0,0,0,.12);outline:none}
+  .twk-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+    width:14px;height:14px;border-radius:50%;background:#fff;
+    border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+  .twk-slider::-moz-range-thumb{width:14px;height:14px;border-radius:50%;
+    background:#fff;border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+
+  .twk-seg{position:relative;display:flex;padding:2px;border-radius:8px;
+    background:rgba(0,0,0,.06);user-select:none}
+  .twk-seg-thumb{position:absolute;top:2px;bottom:2px;border-radius:6px;
+    background:rgba(255,255,255,.9);box-shadow:0 1px 2px rgba(0,0,0,.12);
+    transition:left .15s cubic-bezier(.3,.7,.4,1),width .15s}
+  .twk-seg.dragging .twk-seg-thumb{transition:none}
+  .twk-seg button{appearance:none;position:relative;z-index:1;flex:1;border:0;
+    background:transparent;color:inherit;font:inherit;font-weight:500;min-height:22px;
+    border-radius:6px;cursor:default;padding:4px 6px;line-height:1.2;
+    overflow-wrap:anywhere}
+
+  .twk-toggle{position:relative;width:32px;height:18px;border:0;border-radius:999px;
+    background:rgba(0,0,0,.15);transition:background .15s;cursor:default;padding:0}
+  .twk-toggle[data-on="1"]{background:#34c759}
+  .twk-toggle i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+  .twk-toggle[data-on="1"] i{transform:translateX(14px)}
+
+  .twk-num{display:flex;align-items:center;box-sizing:border-box;min-width:0;height:26px;padding:0 0 0 8px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:7px;background:rgba(255,255,255,.6)}
+  .twk-num-lbl{font-weight:500;color:rgba(41,38,27,.6);cursor:ew-resize;
+    user-select:none;padding-right:8px}
+  .twk-num input{flex:1;min-width:0;height:100%;border:0;background:transparent;
+    font:inherit;font-variant-numeric:tabular-nums;text-align:right;padding:0 8px 0 0;
+    outline:none;color:inherit;-moz-appearance:textfield}
+  .twk-num input::-webkit-inner-spin-button,.twk-num input::-webkit-outer-spin-button{
+    -webkit-appearance:none;margin:0}
+  .twk-num-unit{padding-right:8px;color:rgba(41,38,27,.45)}
+
+  .twk-btn{appearance:none;height:26px;padding:0 12px;border:0;border-radius:7px;
+    background:rgba(0,0,0,.78);color:#fff;font:inherit;font-weight:500;cursor:default}
+  .twk-btn:hover{background:rgba(0,0,0,.88)}
+  .twk-btn.secondary{background:rgba(0,0,0,.06);color:inherit}
+  .twk-btn.secondary:hover{background:rgba(0,0,0,.1)}
+
+  .twk-swatch{appearance:none;-webkit-appearance:none;width:56px;height:22px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:6px;padding:0;cursor:default;
+    background:transparent;flex-shrink:0}
+  .twk-swatch::-webkit-color-swatch-wrapper{padding:0}
+  .twk-swatch::-webkit-color-swatch{border:0;border-radius:5.5px}
+  .twk-swatch::-moz-color-swatch{border:0;border-radius:5.5px}
+
+  .twk-chips{display:flex;gap:6px}
+  .twk-chip{position:relative;appearance:none;flex:1;min-width:0;height:46px;
+    padding:0;border:0;border-radius:6px;overflow:hidden;cursor:default;
+    box-shadow:0 0 0 .5px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.06);
+    transition:transform .12s cubic-bezier(.3,.7,.4,1),box-shadow .12s}
+  .twk-chip:hover{transform:translateY(-1px);
+    box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 4px 10px rgba(0,0,0,.12)}
+  .twk-chip[data-on="1"]{box-shadow:0 0 0 1.5px rgba(0,0,0,.85),
+    0 2px 6px rgba(0,0,0,.15)}
+  .twk-chip>span{position:absolute;top:0;bottom:0;right:0;width:34%;
+    display:flex;flex-direction:column;box-shadow:-1px 0 0 rgba(0,0,0,.1)}
+  .twk-chip>span>i{flex:1;box-shadow:0 -1px 0 rgba(0,0,0,.1)}
+  .twk-chip>span>i:first-child{box-shadow:none}
+  .twk-chip svg{position:absolute;top:6px;left:6px;width:13px;height:13px;
+    filter:drop-shadow(0 1px 1px rgba(0,0,0,.3))}
+`;
+
+// ── useTweaks ───────────────────────────────────────────────────────────────
+// Single source of truth for tweak values. setTweak persists via the host
+// (__edit_mode_set_keys → host rewrites the EDITMODE block on disk).
+function useTweaks(defaults) {
+  const [values, setValues] = React.useState(defaults);
+  // Accepts either setTweak('key', value) or setTweak({ key: value, ... }) so a
+  // useState-style call doesn't write a "[object Object]" key into the persisted
+  // JSON block.
+  const setTweak = React.useCallback((keyOrEdits, val) => {
+    const edits = typeof keyOrEdits === 'object' && keyOrEdits !== null
+      ? keyOrEdits : { [keyOrEdits]: val };
+    setValues((prev) => ({ ...prev, ...edits }));
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits }, '*');
+    // Same-window signal so in-page listeners (deck-stage rail thumbnails)
+    // can react — the parent message only reaches the host, not peers.
+    window.dispatchEvent(new CustomEvent('tweakchange', { detail: edits }));
+  }, []);
+  return [values, setTweak];
+}
+
+// ── TweaksPanel ─────────────────────────────────────────────────────────────
+// Floating shell. Registers the protocol listener BEFORE announcing
+// availability — if the announce ran first, the host's activate could land
+// before our handler exists and the toolbar toggle would silently no-op.
+// The close button posts __edit_mode_dismissed so the host's toolbar toggle
+// flips off in lockstep; the host echoes __deactivate_edit_mode back which
+// is what actually hides the panel.
+function TweaksPanel({ title = 'Tweaks', children }) {
+  const [open, setOpen] = React.useState(false);
+  const dragRef = React.useRef(null);
+  const offsetRef = React.useRef({ x: 16, y: 16 });
+  const PAD = 16;
+
+  const clampToViewport = React.useCallback(() => {
+    const panel = dragRef.current;
+    if (!panel) return;
+    const w = panel.offsetWidth, h = panel.offsetHeight;
+    const maxRight = Math.max(PAD, window.innerWidth - w - PAD);
+    const maxBottom = Math.max(PAD, window.innerHeight - h - PAD);
+    offsetRef.current = {
+      x: Math.min(maxRight, Math.max(PAD, offsetRef.current.x)),
+      y: Math.min(maxBottom, Math.max(PAD, offsetRef.current.y)),
+    };
+    panel.style.right = offsetRef.current.x + 'px';
+    panel.style.bottom = offsetRef.current.y + 'px';
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    clampToViewport();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', clampToViewport);
+      return () => window.removeEventListener('resize', clampToViewport);
+    }
+    const ro = new ResizeObserver(clampToViewport);
+    ro.observe(document.documentElement);
+    return () => ro.disconnect();
+  }, [open, clampToViewport]);
+
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      const t = e?.data?.type;
+      if (t === '__activate_edit_mode') setOpen(true);
+      else if (t === '__deactivate_edit_mode') setOpen(false);
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  const dismiss = () => {
+    setOpen(false);
+    window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*');
+  };
+
+  const onDragStart = (e) => {
+    const panel = dragRef.current;
+    if (!panel) return;
+    const r = panel.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    const startRight = window.innerWidth - r.right;
+    const startBottom = window.innerHeight - r.bottom;
+    const move = (ev) => {
+      offsetRef.current = {
+        x: startRight - (ev.clientX - sx),
+        y: startBottom - (ev.clientY - sy),
+      };
+      clampToViewport();
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  if (!open) return null;
+  return (
+    <>
+      <style>{__TWEAKS_STYLE}</style>
+      <div ref={dragRef} className="twk-panel" data-omelette-chrome=""
+           style={{ right: offsetRef.current.x, bottom: offsetRef.current.y }}>
+        <div className="twk-hd" onMouseDown={onDragStart}>
+          <b>{title}</b>
+          <button className="twk-x" aria-label="Close tweaks"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={dismiss}>✕</button>
+        </div>
+        <div className="twk-body">
+          {children}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── Layout helpers ──────────────────────────────────────────────────────────
+
+function TweakSection({ label, children }) {
+  return (
+    <>
+      <div className="twk-sect">{label}</div>
+      {children}
+    </>
+  );
+}
+
+function TweakRow({ label, value, children, inline = false }) {
+  return (
+    <div className={inline ? 'twk-row twk-row-h' : 'twk-row'}>
+      <div className="twk-lbl">
+        <span>{label}</span>
+        {value != null && <span className="twk-val">{value}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── Controls ────────────────────────────────────────────────────────────────
+
+function TweakSlider({ label, value, min = 0, max = 100, step = 1, unit = '', onChange }) {
+  return (
+    <TweakRow label={label} value={`${value}${unit}`}>
+      <input type="range" className="twk-slider" min={min} max={max} step={step}
+             value={value} onChange={(e) => onChange(Number(e.target.value))} />
+    </TweakRow>
+  );
+}
+
+function TweakToggle({ label, value, onChange }) {
+  return (
+    <div className="twk-row twk-row-h">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <button type="button" className="twk-toggle" data-on={value ? '1' : '0'}
+              role="switch" aria-checked={!!value}
+              onClick={() => onChange(!value)}><i /></button>
+    </div>
+  );
+}
+
+function TweakRadio({ label, value, options, onChange }) {
+  const trackRef = React.useRef(null);
+  const [dragging, setDragging] = React.useState(false);
+  // The active value is read by pointer-move handlers attached for the lifetime
+  // of a drag — ref it so a stale closure doesn't fire onChange for every move.
+  const valueRef = React.useRef(value);
+  valueRef.current = value;
+
+  // Segments wrap mid-word once per-segment width runs out. The track is
+  // ~248px (280 panel − 28 body pad − 4 seg pad), each button loses 12px
+  // to its own padding, and 11.5px system-ui averages ~6.3px/char — so 2
+  // options fit ~16 chars each, 3 fit ~10. Past that (or >3 options), fall
+  // back to a dropdown rather than wrap.
+  const labelLen = (o) => String(typeof o === 'object' ? o.label : o).length;
+  const maxLen = options.reduce((m, o) => Math.max(m, labelLen(o)), 0);
+  const fitsAsSegments = maxLen <= ({ 2: 16, 3: 10 }[options.length] ?? 0);
+  if (!fitsAsSegments) {
+    // <select> emits strings — map back to the original option value so the
+    // fallback stays type-preserving (numbers, booleans) like the segment path.
+    const resolve = (s) => {
+      const m = options.find((o) => String(typeof o === 'object' ? o.value : o) === s);
+      return m === undefined ? s : typeof m === 'object' ? m.value : m;
+    };
+    return <TweakSelect label={label} value={value} options={options}
+                        onChange={(s) => onChange(resolve(s))} />;
+  }
+  const opts = options.map((o) => (typeof o === 'object' ? o : { value: o, label: o }));
+  const idx = Math.max(0, opts.findIndex((o) => o.value === value));
+  const n = opts.length;
+
+  const segAt = (clientX) => {
+    const r = trackRef.current.getBoundingClientRect();
+    const inner = r.width - 4;
+    const i = Math.floor(((clientX - r.left - 2) / inner) * n);
+    return opts[Math.max(0, Math.min(n - 1, i))].value;
+  };
+
+  const onPointerDown = (e) => {
+    setDragging(true);
+    const v0 = segAt(e.clientX);
+    if (v0 !== valueRef.current) onChange(v0);
+    const move = (ev) => {
+      if (!trackRef.current) return;
+      const v = segAt(ev.clientX);
+      if (v !== valueRef.current) onChange(v);
+    };
+    const up = () => {
+      setDragging(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  return (
+    <TweakRow label={label}>
+      <div ref={trackRef} role="radiogroup" onPointerDown={onPointerDown}
+           className={dragging ? 'twk-seg dragging' : 'twk-seg'}>
+        <div className="twk-seg-thumb"
+             style={{ left: `calc(2px + ${idx} * (100% - 4px) / ${n})`,
+                      width: `calc((100% - 4px) / ${n})` }} />
+        {opts.map((o) => (
+          <button key={o.value} type="button" role="radio" aria-checked={o.value === value}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </TweakRow>
+  );
+}
+
+function TweakSelect({ label, value, options, onChange }) {
+  return (
+    <TweakRow label={label}>
+      <select className="twk-field" value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map((o) => {
+          const v = typeof o === 'object' ? o.value : o;
+          const l = typeof o === 'object' ? o.label : o;
+          return <option key={v} value={v}>{l}</option>;
+        })}
+      </select>
+    </TweakRow>
+  );
+}
+
+function TweakText({ label, value, placeholder, onChange }) {
+  return (
+    <TweakRow label={label}>
+      <input className="twk-field" type="text" value={value} placeholder={placeholder}
+             onChange={(e) => onChange(e.target.value)} />
+    </TweakRow>
+  );
+}
+
+function TweakNumber({ label, value, min, max, step = 1, unit = '', onChange }) {
+  const clamp = (n) => {
+    if (min != null && n < min) return min;
+    if (max != null && n > max) return max;
+    return n;
+  };
+  const startRef = React.useRef({ x: 0, val: 0 });
+  const onScrubStart = (e) => {
+    e.preventDefault();
+    startRef.current = { x: e.clientX, val: value };
+    const decimals = (String(step).split('.')[1] || '').length;
+    const move = (ev) => {
+      const dx = ev.clientX - startRef.current.x;
+      const raw = startRef.current.val + dx * step;
+      const snapped = Math.round(raw / step) * step;
+      onChange(clamp(Number(snapped.toFixed(decimals))));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return (
+    <div className="twk-num">
+      <span className="twk-num-lbl" onPointerDown={onScrubStart}>{label}</span>
+      <input type="number" value={value} min={min} max={max} step={step}
+             onChange={(e) => onChange(clamp(Number(e.target.value)))} />
+      {unit && <span className="twk-num-unit">{unit}</span>}
+    </div>
+  );
+}
+
+// Relative-luminance contrast pick — checkmarks drawn over a swatch need to
+// read on both #111 and #fafafa without per-option configuration. Hex input
+// only (#rgb / #rrggbb); named or rgb()/hsl() colors fall through to "light".
+function __twkIsLight(hex) {
+  const h = String(hex).replace('#', '');
+  const x = h.length === 3 ? h.replace(/./g, (c) => c + c) : h.padEnd(6, '0');
+  const n = parseInt(x.slice(0, 6), 16);
+  if (Number.isNaN(n)) return true;
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return r * 299 + g * 587 + b * 114 > 148000;
+}
+
+const __TwkCheck = ({ light }) => (
+  <svg viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M3 7.2 5.8 10 11 4.2" fill="none" strokeWidth="2.2"
+          strokeLinecap="round" strokeLinejoin="round"
+          stroke={light ? 'rgba(0,0,0,.78)' : '#fff'} />
+  </svg>
+);
+
+// TweakColor — curated color/palette picker. Each option is either a single
+// hex string or an array of 1-5 hex strings; the card adapts — a lone color
+// renders solid, a palette renders colors[0] as the hero (left ~2/3) with the
+// rest stacked in a sharp column on the right. onChange emits the
+// option in the shape it was passed (string stays string, array stays array).
+// Without options it falls back to the native color input for back-compat.
+function TweakColor({ label, value, options, onChange }) {
+  if (!options || !options.length) {
+    return (
+      <div className="twk-row twk-row-h">
+        <div className="twk-lbl"><span>{label}</span></div>
+        <input type="color" className="twk-swatch" value={value}
+               onChange={(e) => onChange(e.target.value)} />
+      </div>
+    );
+  }
+  // Native <input type=color> emits lowercase hex per the HTML spec, so
+  // compare case-insensitively. String() guards JSON.stringify(undefined),
+  // which returns the primitive undefined (no .toLowerCase).
+  const key = (o) => String(JSON.stringify(o)).toLowerCase();
+  const cur = key(value);
+  return (
+    <TweakRow label={label}>
+      <div className="twk-chips" role="radiogroup">
+        {options.map((o, i) => {
+          const colors = Array.isArray(o) ? o : [o];
+          const [hero, ...rest] = colors;
+          const sup = rest.slice(0, 4);
+          const on = key(o) === cur;
+          return (
+            <button key={i} type="button" className="twk-chip" role="radio"
+                    aria-checked={on} data-on={on ? '1' : '0'}
+                    aria-label={colors.join(', ')} title={colors.join(' · ')}
+                    style={{ background: hero }}
+                    onClick={() => onChange(o)}>
+              {sup.length > 0 && (
+                <span>
+                  {sup.map((c, j) => <i key={j} style={{ background: c }} />)}
+                </span>
+              )}
+              {on && <__TwkCheck light={__twkIsLight(hero)} />}
+            </button>
+          );
+        })}
+      </div>
+    </TweakRow>
+  );
+}
+
+function TweakButton({ label, onClick, secondary = false }) {
+  return (
+    <button type="button" className={secondary ? 'twk-btn secondary' : 'twk-btn'}
+            onClick={onClick}>{label}</button>
+  );
+}
+
+Object.assign(window, {
+  useTweaks, TweaksPanel, TweakSection, TweakRow,
+  TweakSlider, TweakToggle, TweakRadio, TweakSelect,
+  TweakText, TweakNumber, TweakColor, TweakButton,
+});
+
+</script>
+<script type="text/babel">
+// chronicle.jsx — A Life in Chapters
+const { useState, useEffect, useRef, useCallback } = React;
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "theme": "ivory",
+  "serif": "cormorant",
+  "accent": "#b0863f",
+  "grain": true,
+  "spacing": 30
+}/*EDITMODE-END*/;
+
+const SERIFS = {
+  cormorant: "'Cormorant Garamond','Noto Serif SC',serif",
+  playfair:  "'Playfair Display','Noto Serif SC',serif",
+  ebgaramond:"'EB Garamond','Noto Serif SC',serif",
+};
+
+const CATS = {
+  study:  { label: "学业", en: "Study",  color: "#5f7f9e" },
+  career: { label: "事业", en: "Work",   color: "#4e7d63" },
+  love:   { label: "感情", en: "Love",   color: "#a85d5a" },
+  travel: { label: "旅行", en: "Travel", color: "#b0863f" },
+  family: { label: "家庭", en: "Family", color: "#8a6486" },
+};
+const CAT_KEYS = Object.keys(CATS);
+
+const STORE = "lifelook.v2";
+
+// ── seed ────────────────────────────────────────────────────────
+const SEED = {
+  name: "林知遥",
+  birthYear: 1995, birthMonth: 4, birthDay: null,
+  motto: "把每一段日子，都过成可以收藏的章节。",
+  events: [
+    { id: 1, year: 1995, month: 4, day: null, title: "出生于江南小城", desc: "故事的第一页，在一个多雨的春天翻开。", cat: "family" },
+    { id: 2, year: 2013, month: 9, day: null, title: "考入大学，第一次离家", desc: "把家乡叠进行李箱，独自坐上北去的列车。", cat: "study" },
+    { id: 3, year: 2017, month: 6, day: 12, title: "入职第一家公司", desc: "拿到第一张工牌，开始学习如何成为一个大人。", cat: "career" },
+    { id: 4, year: 2019, month: 8, day: null, title: "独自前往西藏旅行", desc: "在海拔五千米的清晨，第一次觉得世界辽阔而温柔。", cat: "travel" },
+    { id: 5, year: 2021, month: 11, day: null, title: "遇见她", desc: "" , cat: "love" },
+    { id: 6, year: 2023, month: 3, day: null, title: "拥有了第一个属于自己的家", desc: "钥匙落进手心的那一刻，漂泊忽然有了落点。", cat: "family" },
+  ],
+};
+
+function load() {
+  try { const v = JSON.parse(localStorage.getItem(STORE)); if (v && v.events) return v; } catch (e) {}
+  return SEED;
+}
+
+// ── date helpers ────────────────────────────────────────────────
+function dateKey(e) { return (e.year || 0) * 1e4 + (e.month || 0) * 1e2 + (e.day || 0); }
+
+function ageAt(p, e) {
+  if (!p.birthYear || !e.year) return null;
+  let a = e.year - p.birthYear;
+  if (p.birthMonth && e.month) {
+    if (e.month < p.birthMonth || (e.month === p.birthMonth && p.birthDay && e.day && e.day < p.birthDay)) a -= 1;
+  }
+  return a;
+}
+function ageLabel(a) {
+  if (a == null) return "";
+  if (a < 0) return "出生前";
+  if (a === 0) return "出生之年";
+  return a + " 岁";
+}
+function whenLabel(e) {
+  if (!e.month) return "";
+  return e.month + " 月" + (e.day ? " " + e.day + " 日" : "");
+}
+function bornLabel(p) {
+  if (!p.birthYear) return "";
+  let s = p.birthYear + " 年";
+  if (p.birthMonth) s += " · " + p.birthMonth + " 月" + (p.birthDay ? " " + p.birthDay + " 日" : "");
+  return s + " 生";
+}
+
+// ── small field components ──────────────────────────────────────
+function NumIn({ value, onChange, placeholder, min, max }) {
+  return <input type="number" value={value ?? ""} placeholder={placeholder} min={min} max={max}
+    onChange={(e) => onChange(e.target.value === "" ? null : Math.max(min ?? -9999, Math.min(max ?? 99999, parseInt(e.target.value) || 0)))} />;
+}
+
+// ── Event / Profile modals ──────────────────────────────────────
+function EventModal({ draft, onSave, onDelete, onClose }) {
+  const [d, setD] = useState(draft);
+  const set = (k, v) => setD((s) => ({ ...s, [k]: v }));
+  const valid = d.year && String(d.title || "").trim();
+  return (
+    <div className="scrim" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+        <h2>{draft.id ? "编辑节点" : "添加节点"}</h2>
+        <div className="sub">{draft.id ? "修改这一段人生章节。" : "记录人生中的一个重要时刻。"}</div>
+
+        <div className="field">
+          <label>时间</label>
+          <div className="row3">
+            <NumIn value={d.year} onChange={(v) => set("year", v)} placeholder="年 *" min={1} max={3000} />
+            <NumIn value={d.month} onChange={(v) => set("month", v)} placeholder="月" min={1} max={12} />
+            <NumIn value={d.day} onChange={(v) => set("day", v)} placeholder="日" min={1} max={31} />
+          </div>
+          <div className="hint">年份必填；月、日可留空。</div>
+        </div>
+
+        <div className="field">
+          <label>事件标题</label>
+          <input value={d.title || ""} maxLength={40} placeholder="发生了什么？"
+            onChange={(e) => set("title", e.target.value)} />
+        </div>
+
+        <div className="field">
+          <label>一句话描述（可选）</label>
+          <textarea value={d.desc || ""} maxLength={120} placeholder="为这一刻留一句注脚……"
+            onChange={(e) => set("desc", e.target.value)} />
+        </div>
+
+        <div className="field">
+          <label>分类</label>
+          <div className="cats">
+            {CAT_KEYS.map((k) => (
+              <button key={k} className="catbtn" data-on={d.cat === k ? 1 : 0}
+                style={{ "--cc": CATS[k].color }} onClick={() => set("cat", k)}>
+                <span className="sw" style={{ background: CATS[k].color }}></span>{CATS[k].label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="actions">
+          {draft.id ? <button className="btn danger" onClick={() => onDelete(draft.id)}>删除</button> : null}
+          <div className="spacer"></div>
+          <button className="btn ghost" onClick={onClose}>取消</button>
+          <button className="btn fill" disabled={!valid} style={{ opacity: valid ? 1 : .4 }}
+            onClick={() => valid && onSave(d)}>保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProfileModal({ profile, onSave, onClose }) {
+  const [d, setD] = useState(profile);
+  const set = (k, v) => setD((s) => ({ ...s, [k]: v }));
+  return (
+    <div className="scrim" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+        <h2>编辑信息</h2>
+        <div className="sub">这些会成为整张编年史的扉页。</div>
+
+        <div className="field">
+          <label>姓名</label>
+          <input value={d.name || ""} maxLength={24} placeholder="你的名字"
+            onChange={(e) => set("name", e.target.value)} />
+        </div>
+
+        <div className="field">
+          <label>出生日期</label>
+          <div className="row3">
+            <NumIn value={d.birthYear} onChange={(v) => set("birthYear", v)} placeholder="年 *" min={1} max={3000} />
+            <NumIn value={d.birthMonth} onChange={(v) => set("birthMonth", v)} placeholder="月" min={1} max={12} />
+            <NumIn value={d.birthDay} onChange={(v) => set("birthDay", v)} placeholder="日" min={1} max={31} />
+          </div>
+          <div className="hint">用于自动推算每个节点发生时的年龄。</div>
+        </div>
+
+        <div className="field">
+          <label>人生主题 / 箴言</label>
+          <textarea value={d.motto || ""} maxLength={80} placeholder="一句属于你的话……"
+            onChange={(e) => set("motto", e.target.value)} />
+        </div>
+
+        <div className="actions">
+          <div className="spacer"></div>
+          <button className="btn ghost" onClick={onClose}>取消</button>
+          <button className="btn fill" onClick={() => onSave(d)}>保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Node ────────────────────────────────────────────────────────
+function Node({ e, profile, index, onClick }) {
+  const c = CATS[e.cat] || CATS.family;
+  const age = ageLabel(ageAt(profile, e));
+  const when = whenLabel(e);
+  return (
+    <div className="node" style={{ "--c": c.color, animationDelay: (0.18 + index * 0.07) + "s" }}>
+      <span className="dot"></span>
+      <div className="left">
+        <div className="yr">{e.year}</div>
+        {when ? <div className="when">{when}</div> : null}
+        {age ? <div className="age">{age}</div> : null}
+      </div>
+      <div className="content" onClick={onClick}>
+        <div className="cat"><span className="cd"></span>{c.label}</div>
+        <div className="ttl">{e.title}<span className="edittag">编辑</span></div>
+        {e.desc ? <div className="desc">{e.desc}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+// ── App ─────────────────────────────────────────────────────────
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [data, setData] = useState(load);
+  const [modal, setModal] = useState(null); // {type:'event', draft} | {type:'profile'}
+  const [anim, setAnim] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const [toast, setToast] = useState("");
+  const sheetRef = useRef(null);
+  const toastTimer = useRef(null);
+
+  useEffect(() => { localStorage.setItem(STORE, JSON.stringify(data)); }, [data]);
+  useEffect(() => { const id = setTimeout(() => setAnim(false), 2200); return () => clearTimeout(id); }, []);
+
+  const flash = (msg) => {
+    setToast(msg); clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(""), 2200);
+  };
+
+  const profile = { name: data.name, birthYear: data.birthYear, birthMonth: data.birthMonth, birthDay: data.birthDay, motto: data.motto };
+  const sorted = [...data.events].sort((a, b) => dateKey(a) - dateKey(b));
+
+  const saveEvent = (d) => {
+    setData((s) => {
+      const ev = { ...d, id: d.id || Date.now() };
+      const events = d.id ? s.events.map((e) => (e.id === d.id ? ev : e)) : [...s.events, ev];
+      return { ...s, events };
+    });
+    setModal(null); flash(d.id ? "节点已更新" : "节点已添加");
+  };
+  const deleteEvent = (id) => { setData((s) => ({ ...s, events: s.events.filter((e) => e.id !== id) })); setModal(null); flash("节点已删除"); };
+  const saveProfile = (d) => { setData((s) => ({ ...s, ...d })); setModal(null); flash("信息已保存"); };
+
+  const openAdd = () => setModal({ type: "event", draft: { cat: "career", year: new Date().getFullYear() } });
+  const openEdit = (e) => setModal({ type: "event", draft: { ...e } });
+
+  const exportPng = async () => {
+    if (exporting) return;
+    setExporting(true); flash("正在生成高清长图……");
+    await new Promise((r) => setTimeout(r, 60));
+    try {
+      const cs = getComputedStyle(document.querySelector(".app"));
+      const tok = (n) => cs.getPropertyValue(n).trim();
+      const model = {
+        serif: SERIFS[t.serif] || SERIFS.cormorant,
+        sans: "'Noto Sans SC', ui-sans-serif, system-ui, sans-serif",
+        accent: t.accent,
+        grain: t.grain,
+        gap: t.spacing,
+        colors: { paper: tok("--paper"), ink: tok("--ink"), soft: tok("--soft"), muted: tok("--muted"), faint: tok("--faint"), line: tok("--line") },
+        kicker: "个人编年史 · A LIFE IN CHAPTERS",
+        name: data.name || "你的名字",
+        born: bornLabel(profile),
+        motto: data.motto || "",
+        colophon: data.name ? "· " + data.name + " · 谨以此志 ·" : "· 谨以此志 ·",
+        nodes: sorted.map((e) => {
+          const cc = CATS[e.cat] || CATS.family;
+          return { year: e.year, when: whenLabel(e), age: ageLabel(ageAt(profile, e)), catLabel: cc.label, catColor: cc.color, title: e.title, desc: e.desc || "" };
+        }),
+        today: (showToday && sorted.length > 0)
+          ? { year: "今", when: "", age: todayAge, catLabel: "此刻", catColor: "", title: "故事仍在继续……", desc: "" }
+          : null,
+        filename: (data.name ? data.name + "的" : "") + "人生概览.png",
+      };
+      await window.exportChronicle(model);
+      flash("已保存为图片 ✓");
+    } catch (err) {
+      console.error(err); flash("导出失败，请重试");
+    } finally { setExporting(false); }
+  };
+
+  const nowYear = new Date().getFullYear();
+  const showToday = !data.events.some((e) => e.year >= nowYear);
+  const todayAge = ageLabel(ageAt(profile, { year: nowYear, month: new Date().getMonth() + 1, day: new Date().getDate() }));
+
+  return (
+    <div className={"app" + (t.grain ? "" : " nograin")} data-theme={t.theme}
+      style={{ "--serif": SERIFS[t.serif] || SERIFS.cormorant, "--accent": t.accent, "--gap": t.spacing + "px" }}>
+
+      {/* toolbar */}
+      <div className="bar">
+        <button onClick={() => setModal({ type: "profile" })}>
+          <svg className="ic" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+          信息
+        </button>
+        <button className="primary" onClick={openAdd}>
+          <svg className="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          添加节点
+        </button>
+        <div className="sep"></div>
+        <button onClick={exportPng}>
+          <svg className="ic" viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4M5 21h14"/></svg>
+          {exporting ? "生成中…" : "保存为图片"}
+        </button>
+      </div>
+
+      {/* the sheet */}
+      <div className="stage">
+        <div className={"sheet" + (anim ? " anim" : "") + (exporting ? " exporting" : "")} ref={sheetRef}>
+          <div className="topline"></div>
+          <div className="grain"></div>
+          <header className="hd">
+            <div className="kicker">个人编年史 · A Life in Chapters</div>
+            <h1 className="name">{data.name || "你的名字"}</h1>
+            {bornLabel(profile) ? <div className="born">{bornLabel(profile)}</div> : null}
+            {data.motto ? <p className="motto">「{data.motto}」</p> : null}
+            <div className="ornament"><i></i><b></b><i></i></div>
+          </header>
+
+          <div className="timeline">
+            <div className="axisline"></div>
+            {sorted.length === 0 ? (
+              <div className="empty">还没有任何章节。<br/>点击「添加节点」，写下第一段。</div>
+            ) : sorted.map((e, i) => (
+              <Node key={e.id} e={e} profile={profile} index={i} onClick={() => openEdit(e)} />
+            ))}
+
+            {showToday && sorted.length > 0 ? (
+              <div className="node today" style={{ "--c": "var(--muted)", animationDelay: (0.18 + sorted.length * 0.07) + "s" }}>
+                <span className="dot"></span>
+                <div className="left">
+                  <div className="yr">今</div>
+                  {todayAge ? <div className="age">{todayAge}</div> : null}
+                </div>
+                <div className="content" style={{ cursor: "default" }}>
+                  <div className="cat" style={{ color: "var(--muted)" }}><span className="cd" style={{ background: "var(--muted)" }}></span>此刻</div>
+                  <div className="ttl" style={{ fontStyle: "italic", fontFamily: "var(--serif)", color: "var(--soft)" }}>故事仍在继续……</div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="colophon">· {data.name || ""} {data.name ? "·" : ""} 谨以此志 ·</div>
+        </div>
+      </div>
+
+      {/* toast */}
+      <div className={"toast" + (toast ? " show" : "")}>{toast}</div>
+
+      {/* modals */}
+      {modal?.type === "event" ? (
+        <EventModal draft={modal.draft} onSave={saveEvent} onDelete={deleteEvent} onClose={() => setModal(null)} />
+      ) : null}
+      {modal?.type === "profile" ? (
+        <ProfileModal profile={profile} onSave={saveProfile} onClose={() => setModal(null)} />
+      ) : null}
+
+      {/* tweaks */}
+      <TweaksPanel title="格调">
+        <TweakSection label="氛围" />
+        <TweakRadio label="主题" value={t.theme}
+          options={[{ value: "ivory", label: "象牙白" }, { value: "ink", label: "墨黑" }]}
+          onChange={(v) => setTweak("theme", v)} />
+        <TweakToggle label="纸张噪点" value={t.grain} onChange={(v) => setTweak("grain", v)} />
+        <TweakSection label="字体" />
+        <TweakSelect label="标题衬线体" value={t.serif}
+          options={[{ value: "cormorant", label: "Cormorant Garamond" }, { value: "playfair", label: "Playfair Display" }, { value: "ebgaramond", label: "EB Garamond" }]}
+          onChange={(v) => setTweak("serif", v)} />
+        <TweakSection label="点缀" />
+        <TweakColor label="点缀色" value={t.accent}
+          options={["#b0863f", "#4e7d63", "#a85d5a", "#5f7f9e", "#8a6486"]}
+          onChange={(v) => setTweak("accent", v)} />
+        <TweakSlider label="节点间距" value={t.spacing} min={18} max={56} step={2} unit="px"
+          onChange={(v) => setTweak("spacing", v)} />
+      </TweaksPanel>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+
+</script>
+</body>
+</html>
