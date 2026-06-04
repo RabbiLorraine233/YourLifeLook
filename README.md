@@ -5,8 +5,6 @@ A Life in Chapters
 
 > 「把每一段日子，都过成可以收藏的章节。」
 
-![预览](screenshots/hero.png)
-
 ---
 
 ## ✨ 特性
